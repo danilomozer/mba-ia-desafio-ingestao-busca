@@ -1,155 +1,128 @@
 # Ingestão e Busca Semântica com LangChain e Postgres
 
-## Objetivo
+Desafio do MBA em Engenharia de Software com IA (Full Cycle).
 
-Você deve entregar um software capaz de:
-
-- Ingestão: Ler um arquivo PDF e salvar suas informações em um banco de dados PostgreSQL com extensão pgVector.
-- Busca: Permitir que o usuário faça perguntas via linha de comando (CLI) e receba respostas baseadas apenas no conteúdo do PDF.
-
-## Exemplo no CLI
-
-Faça sua pergunta:
+O projeto lê um PDF, divide o texto em chunks, gera embeddings e salva tudo num PostgreSQL com pgVector. Depois, um chat no terminal responde perguntas usando **apenas** o conteúdo do PDF.
 
 ```
+Faça sua pergunta (digite 'sair' para encerrar):
+
 PERGUNTA: Qual o faturamento da Empresa SuperTechIABrazil?
 RESPOSTA: O faturamento foi de 10 milhões de reais.
 
 ---
 
-Perguntas fora do contexto:
-
 PERGUNTA: Quantos clientes temos em 2024?
 RESPOSTA: Não tenho informações necessárias para responder sua pergunta.
 ```
 
-## Tecnologias obrigatórias
+## Como funciona
 
-- Linguagem: Python
-- Framework: LangChain
-- Banco de dados: PostgreSQL + pgVector
-- Execução do banco de dados: Docker & Docker Compose (docker-compose fornecido no repositório de exemplo)
+**Ingestão (`src/ingest.py`)**
+1. Carrega o PDF com `PyPDFLoader`.
+2. Divide o texto com `RecursiveCharacterTextSplitter` em chunks de 1000 caracteres com overlap de 150.
+3. Gera o embedding de cada chunk e grava no Postgres com `PGVector`.
 
-## Pacotes recomendados
+A collection é recriada a cada ingestão, então rodar o script de novo não duplica os chunks.
 
-- Split: `from langchain_text_splitters import RecursiveCharacterTextSplitter`
-- Embeddings (OpenAI): `from langchain_openai import OpenAIEmbeddings`
-- Embeddings (Gemini): `from langchain_google_genai import GoogleGenerativeAIEmbeddings`
-- PDF: `from langchain_community.document_loaders import PyPDFLoader`
-- Ingestão: `from langchain_postgres import PGVector`
-- Busca: `similarity_search_with_score(query, k=10)`
+**Busca (`src/search.py`)**
+1. Vetoriza a pergunta.
+2. Busca os 10 chunks mais relevantes com `similarity_search_with_score(pergunta, k=10)`.
+3. Monta o prompt do desafio com os chunks concatenados no `CONTEXTO`.
+4. Chama a LLM e devolve a resposta.
 
-## OpenAI
+**Chat (`src/chat.py`)**: loop no terminal que recebe a pergunta, chama a busca e mostra a resposta. Digite `sair` (ou Ctrl+C) para encerrar.
 
-- Crie uma API Key da OpenAI.
-- Você vai precisar de um modelo de embeddings e de um modelo de LLM para responder. Consulte a documentação oficial da OpenAI para ver os modelos disponíveis.
+## Provedores e modelos
 
-## Gemini
+Funciona com **OpenAI** ou **Gemini**, escolhido pelo `.env`:
 
-- Crie uma API Key da Google.
-- Você vai precisar de um modelo de embeddings e de um modelo de LLM para responder. Consulte a documentação oficial do Google para ver os modelos disponíveis.
+| Provedor | Embeddings | LLM |
+|---|---|---|
+| OpenAI | `text-embedding-3-small` | `gpt-6-luna` |
+| Gemini | `gemini-embedding-001` | `gemini-3.5-flash-lite` |
 
-Os limites de requisições gratuitas dos modelos podem mudar com frequência. Para informações atualizadas, consulte a documentação oficial do Google.
+São os modelos mais leves e baratos de cada provedor disponíveis em novembro de 2026, conforme a documentação oficial. Se algum for descontinuado, troque o nome no `.env`. Não precisa mudar o código.
 
-## Escolha dos modelos
+> **Trocou o modelo de embeddings?** Cada modelo gera vetores de uma dimensão diferente. Rode `python src/ingest.py` de novo para recriar a collection com o novo modelo.
 
-Este desafio não fixa modelos. Nomes e versões mudam com frequência e alguns são descontinuados, então faz parte do desafio consultar a documentação oficial do provedor que você escolher, ver quais modelos estão disponíveis no momento e selecionar os que atendem ao objetivo. Para o volume deste desafio, os modelos mais leves e baratos de cada provedor são suficientes.
+## Pré-requisitos
 
-Atenção: modelos de embedding diferentes geram vetores com dimensões diferentes. A tabela de vetores é criada na primeira ingestão, já com a dimensão do modelo que você escolheu. Se você trocar de modelo de embeddings depois disso, a ingestão passa a falhar por incompatibilidade de dimensão. Nesse caso é responsabilidade sua apagar a collection existente (ou o volume do banco) e refazer a ingestão do zero com o novo modelo.
+- Python 3.10 ou superior
+- Docker e Docker Compose
+- API key da OpenAI ou do Google (Gemini)
 
-## Requisitos
+## Como executar
 
-### 1. Ingestão do PDF
+### 1. Clonar o repositório
 
-- O PDF deve ser dividido em chunks de 1000 caracteres com overlap de 150.
-- Cada chunk deve ser convertido em embedding.
-- Os vetores devem ser armazenados no banco de dados PostgreSQL com pgVector.
-
-### 2. Consulta via CLI
-
-Criar um script Python para simular um chat no terminal.
-
-Passos ao receber uma pergunta:
-
-- Vetorizar a pergunta.
-- Buscar os 10 resultados mais relevantes (k=10) no banco vetorial.
-- Montar o prompt e chamar a LLM.
-- Retornar a resposta ao usuário.
-
-Prompt a ser utilizado:
-
-```
-CONTEXTO:
-{resultados concatenados do banco de dados}
-
-REGRAS:
-- Responda somente com base no CONTEXTO.
-- Se a informação não estiver explicitamente no CONTEXTO, responda:
-  "Não tenho informações necessárias para responder sua pergunta."
-- Nunca invente ou use conhecimento externo.
-- Nunca produza opiniões ou interpretações além do que está escrito.
-
-EXEMPLOS DE PERGUNTAS FORA DO CONTEXTO:
-Pergunta: "Qual é a capital da França?"
-Resposta: "Não tenho informações necessárias para responder sua pergunta."
-
-Pergunta: "Quantos clientes temos em 2024?"
-Resposta: "Não tenho informações necessárias para responder sua pergunta."
-
-Pergunta: "Você acha isso bom ou ruim?"
-Resposta: "Não tenho informações necessárias para responder sua pergunta."
-
-PERGUNTA DO USUÁRIO:
-{pergunta do usuário}
-
-RESPONDA A "PERGUNTA DO USUÁRIO"
+```bash
+git clone <url-deste-repositorio>
+cd mba-ia-desafio-ingestao-busca
 ```
 
-## Estrutura obrigatória do projeto
+### 2. Criar o ambiente virtual e instalar as dependências
 
-Faça um fork do repositório para utilizar a estrutura abaixo: https://github.com/devfullcycle/mba-ia-desafio-ingestao-busca
-
-```
-├── docker-compose.yml
-├── requirements.txt      # Dependências
-├── .env.example          # Template das variáveis de ambiente
-├── src/
-│   ├── ingest.py         # Script de ingestão do PDF
-│   ├── search.py         # Script de busca
-│   ├── chat.py           # CLI para interação com usuário
-├── document.pdf          # PDF para ingestão
-└── README.md             # Instruções de execução
-```
-
-## VirtualEnv para Python
-
-Crie e ative um ambiente virtual antes de instalar dependências:
-
-```
+```bash
 python3 -m venv venv
 source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-## Ordem de execução
+### 3. Configurar as variáveis de ambiente
 
-1. Subir o banco de dados:
-
+```bash
+cp .env.example .env
 ```
+
+Abra o `.env` e preencha **uma** das API keys (`OPENAI_API_KEY` ou `GOOGLE_API_KEY`). Os outros valores já vêm prontos para o docker-compose do projeto.
+
+| Variável | Descrição |
+|---|---|
+| `PROVIDER` | `openai` ou `gemini`. Se ficar vazia, usa o provedor que tiver API key. |
+| `OPENAI_API_KEY` / `GOOGLE_API_KEY` | API key do provedor escolhido. |
+| `OPENAI_EMBEDDING_MODEL` / `GOOGLE_EMBEDDING_MODEL` | Modelo de embeddings. |
+| `OPENAI_LLM_MODEL` / `GOOGLE_LLM_MODEL` | Modelo que gera a resposta. |
+| `DATABASE_URL` | Conexão com o Postgres (`postgresql+psycopg://postgres:postgres@localhost:5432/rag`). |
+| `PG_VECTOR_COLLECTION_NAME` | Nome da collection de vetores. |
+| `PDF_PATH` | Caminho do PDF, relativo à raiz do projeto ou absoluto (`document.pdf`). |
+
+### 4. Subir o banco de dados
+
+```bash
 docker compose up -d
 ```
 
-2. Executar ingestão do PDF:
+Sobe o PostgreSQL com pgVector e cria a extensão `vector` no banco `rag`.
 
-```
+### 5. Executar a ingestão do PDF
+
+```bash
 python src/ingest.py
 ```
 
-3. Rodar o chat:
+### 6. Rodar o chat
 
-```
+```bash
 python src/chat.py
 ```
 
-## Entregável
+## Estrutura
 
-Repositório público no GitHub contendo todo o código-fonte e README com instruções claras de execução do projeto.
+```
+├── docker-compose.yml    # Postgres + pgVector
+├── requirements.txt      # Dependências
+├── .env.example          # Template das variáveis de ambiente
+├── src/
+│   ├── ingest.py         # Ingestão do PDF
+│   ├── search.py         # Busca semântica, prompt e LLM
+│   ├── chat.py           # CLI de chat
+├── document.pdf          # PDF para ingestão
+└── README.md
+```
+
+## Problemas comuns
+
+- **`connection refused` na porta 5432**: o banco não está de pé. Rode `docker compose up -d` e espere alguns segundos.
+- **Erro de dimensão do vetor**: o modelo de embeddings mudou desde a última ingestão. Rode `python src/ingest.py` de novo. Se ainda falhar, apague o volume com `docker compose down -v`, suba o banco de novo e refaça a ingestão.
+- **Erro 404 ou "model not found"**: o modelo foi descontinuado. Consulte a documentação do provedor e atualize o nome no `.env`.
