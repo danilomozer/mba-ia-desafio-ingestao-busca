@@ -1,6 +1,8 @@
 import logging
 import os
+import re
 import sys
+import time
 import warnings
 from pathlib import Path
 
@@ -24,7 +26,38 @@ PDF_PATH = os.getenv("PDF_PATH")
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
-BATCH_SIZE = 50
+BATCH_SIZE = 20
+MAX_RETRIES = 6
+DEFAULT_RETRY_WAIT = 60  # segundos, quando a API não informa quanto esperar
+
+
+def is_rate_limit_error(exc):
+    text = str(exc)
+    return "429" in text or "RESOURCE_EXHAUSTED" in text or "rate limit" in text.lower()
+
+
+def retry_wait_seconds(exc):
+    """Usa o tempo sugerido pela API ("retry in 54s"), com uma pequena folga."""
+    match = re.search(r"retry in ([\d.]+)\s*s", str(exc), re.IGNORECASE)
+    return float(match.group(1)) + 2 if match else DEFAULT_RETRY_WAIT
+
+
+def add_batch_with_retry(store, documents, ids):
+    """Grava um lote; se o provedor limitar as requisições, espera e tenta de novo.
+
+    Os ids fixos fazem a regravação de um lote ser idempotente (upsert).
+    """
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            store.add_documents(documents=documents, ids=ids)
+            return
+        except Exception as exc:
+            if not is_rate_limit_error(exc) or attempt == MAX_RETRIES:
+                raise
+            wait = retry_wait_seconds(exc)
+            print(f"  Limite de requisições do provedor atingido. Aguardando {wait:.0f}s "
+                  f"(tentativa {attempt}/{MAX_RETRIES - 1})...")
+            time.sleep(wait)
 
 
 def resolve_pdf_path():
@@ -77,7 +110,7 @@ def ingest_pdf():
     ids = [f"chunk-{i}" for i in range(len(chunks))]
     for start in range(0, len(chunks), BATCH_SIZE):
         end = start + BATCH_SIZE
-        store.add_documents(documents=chunks[start:end], ids=ids[start:end])
+        add_batch_with_retry(store, chunks[start:end], ids[start:end])
         print(f"  {min(end, len(chunks))}/{len(chunks)} chunks salvos")
 
     print("Ingestão concluída.")
